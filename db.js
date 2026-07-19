@@ -72,6 +72,9 @@ async function initSchema() {
       ALTER TABLE gemeenten ADD COLUMN IF NOT EXISTS ev_aandeel_override JSONB;
       ALTER TABLE wijken ADD COLUMN IF NOT EXISTS wijktype_v2 JSONB DEFAULT '["woonwijk"]'::jsonb;
       ALTER TABLE wijken ADD COLUMN IF NOT EXISTS ov_aandeel DOUBLE PRECISION DEFAULT 0;
+      ALTER TABLE wijken ADD COLUMN IF NOT EXISTS oppervlakte_km2 DOUBLE PRECISION;
+      ALTER TABLE wijken ADD COLUMN IF NOT EXISTS oppervlakte_is_proxy BOOLEAN DEFAULT true;
+      ALTER TABLE gemeenten ADD COLUMN IF NOT EXISTS oppervlakte_km2 DOUBLE PRECISION;
     `);
 
     // Backfill voor de drie startgemeenten: als deze al bestonden vóór deze
@@ -81,14 +84,14 @@ async function initSchema() {
     // Deze UPDATE zet de juiste waarden altijd terug, ook op een bestaande rij.
     for (const g of STARTDATA) {
       await client.query(
-        `UPDATE gemeenten SET welvaartsindex=$1, prive_pct_berekend=$2, ev_aandeel_override=$3
-         WHERE id=$4`,
+        `UPDATE gemeenten SET welvaartsindex=$1, prive_pct_berekend=$2, ev_aandeel_override=$3, oppervlakte_km2=$4
+         WHERE id=$5`,
         [g.welvaartsindex ?? 106.9, g.privePctBerekend ?? 0.5,
-         g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null, g.id]);
+         g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null, g.oppervlakte ?? null, g.id]);
       for (const w of g.wijken) {
         await client.query(
-          `UPDATE wijken SET wijktype_v2=$1, ov_aandeel=$2 WHERE id=$3 AND gemeente_id=$4`,
-          [JSON.stringify(w.type), w.ov, w.id, g.id]);
+          `UPDATE wijken SET wijktype_v2=$1, ov_aandeel=$2, oppervlakte_km2=$3, oppervlakte_is_proxy=false WHERE id=$4 AND gemeente_id=$5`,
+          [JSON.stringify(w.type), w.ov, w.opp ?? null, w.id, g.id]);
       }
     }
     console.log('✓ Schema gereed');
@@ -102,47 +105,47 @@ async function initSchema() {
 const STARTDATA = [
   {
     id:'leuven', naam:'Leuven', provincie:'Vlaams-Brabant', land:'België',
-    inwoners:104906, voertuigen:48200,
+    inwoners:104906, voertuigen:48200, oppervlakte:56.63,
     welvaartsindex:115, privePctBerekend:0.636, evAandeelOverride:{2030:0.376, 2035:0.595},
     lat:50.8798, lng:4.7005, zoom:13, kleur:'#2B5F6E',
     bbox:[50.82,4.65,50.94,4.77],
     wijken:[
-      { id:'LV01', naam:'Leuven Centrum',      inw:18400, vrt:7200,  lat:50.8793, lng:4.7009, type:['binnenstad'],       ov:0 },
-      { id:'LV02', naam:'Kessel-Lo',            inw:22100, vrt:9800,  lat:50.8900, lng:4.7280, type:['woonwijk'],         ov:0 },
-      { id:'LV03', naam:'Heverlee',             inw:19600, vrt:9100,  lat:50.8560, lng:4.7050, type:['woonwijk'],         ov:0 },
-      { id:'LV04', naam:'Wilsele',              inw:12300, vrt:5600,  lat:50.9100, lng:4.7050, type:['woonwijk'],         ov:0 },
-      { id:'LV05', naam:'Wijgmaal',             inw:5200,  vrt:2400,  lat:50.9280, lng:4.7120, type:['woonwijk'],         ov:0 },
-      { id:'LV06', naam:'Haasrode/Korbeek-Lo',  inw:8900,  vrt:4200,  lat:50.8420, lng:4.7400, type:['bedrijventerrein'], ov:0 },
-      { id:'LV07', naam:'Binnenstad Oost',      inw:9800,  vrt:3200,  lat:50.8780, lng:4.7160, type:['binnenstad'],       ov:0 },
-      { id:'LV08', naam:'Arenberg/Wetenschap',  inw:6200,  vrt:4800,  lat:50.8640, lng:4.6880, type:['woonwijk'],         ov:0 },
+      { id:'LV01', naam:'Leuven Centrum',      inw:18400, vrt:7200,  lat:50.8793, lng:4.7009, type:['binnenstad'],       ov:0, opp:10.17 },
+      { id:'LV02', naam:'Kessel-Lo',            inw:22100, vrt:9800,  lat:50.8900, lng:4.7280, type:['woonwijk'],         ov:0, opp:12.21 },
+      { id:'LV03', naam:'Heverlee',             inw:19600, vrt:9100,  lat:50.8560, lng:4.7050, type:['woonwijk'],         ov:0, opp:10.83 },
+      { id:'LV04', naam:'Wilsele',              inw:12300, vrt:5600,  lat:50.9100, lng:4.7050, type:['woonwijk'],         ov:0, opp:6.80 },
+      { id:'LV05', naam:'Wijgmaal',             inw:5200,  vrt:2400,  lat:50.9280, lng:4.7120, type:['woonwijk'],         ov:0, opp:2.87 },
+      { id:'LV06', naam:'Haasrode/Korbeek-Lo',  inw:8900,  vrt:4200,  lat:50.8420, lng:4.7400, type:['bedrijventerrein'], ov:0, opp:4.92 },
+      { id:'LV07', naam:'Binnenstad Oost',      inw:9800,  vrt:3200,  lat:50.8780, lng:4.7160, type:['binnenstad'],       ov:0, opp:5.41 },
+      { id:'LV08', naam:'Arenberg/Wetenschap',  inw:6200,  vrt:4800,  lat:50.8640, lng:4.6880, type:['woonwijk'],         ov:0, opp:3.43 },
     ],
   },
   {
     id:'olen', naam:'Olen', provincie:'Antwerpen', land:'België',
-    inwoners:14000, voertuigen:8200,
+    inwoners:14000, voertuigen:8200, oppervlakte:23.10,
     welvaartsindex:92, privePctBerekend:0.70,
     lat:51.1400, lng:4.8600, zoom:13, kleur:'#3A6B4A',
     bbox:[51.10,4.82,51.18,4.91],
     wijken:[
-      { id:'OL01', naam:'Olen Centrum',   inw:5200, vrt:3100, lat:51.1380, lng:4.8580, type:['binnenstad'],       ov:0 },
-      { id:'OL02', naam:'Olen Noord',     inw:3800, vrt:2300, lat:51.1520, lng:4.8550, type:['woonwijk'],         ov:0 },
-      { id:'OL03', naam:'Industriezone',  inw:800,  vrt:1200, lat:51.1350, lng:4.8750, type:['bedrijventerrein'], ov:0 },
-      { id:'OL04', naam:'Olen Oost',      inw:4200, vrt:2600, lat:51.1380, lng:4.8820, type:['woonwijk'],         ov:0 },
+      { id:'OL01', naam:'Olen Centrum',   inw:5200, vrt:3100, lat:51.1380, lng:4.8580, type:['binnenstad'],       ov:0, opp:8.58 },
+      { id:'OL02', naam:'Olen Noord',     inw:3800, vrt:2300, lat:51.1520, lng:4.8550, type:['woonwijk'],         ov:0, opp:6.27 },
+      { id:'OL03', naam:'Industriezone',  inw:800,  vrt:1200, lat:51.1350, lng:4.8750, type:['bedrijventerrein'], ov:0, opp:1.32 },
+      { id:'OL04', naam:'Olen Oost',      inw:4200, vrt:2600, lat:51.1380, lng:4.8820, type:['woonwijk'],         ov:0, opp:6.93 },
     ],
   },
   {
     id:'gent', naam:'Gent', provincie:'Oost-Vlaanderen', land:'België',
-    inwoners:268000, voertuigen:112000,
+    inwoners:268000, voertuigen:112000, oppervlakte:156.18,
     welvaartsindex:98, privePctBerekend:0.60,
     lat:51.0543, lng:3.7174, zoom:12, kleur:'#9EC5CB',
     bbox:[50.99,3.64,51.12,3.80],
     wijken:[
-      { id:'GN01', naam:'Gent Centrum',       inw:28000, vrt:9800,  lat:51.0543, lng:3.7174, type:['binnenstad'],       ov:0 },
-      { id:'GN02', naam:'Ledeberg',           inw:18000, vrt:7200,  lat:51.0380, lng:3.7350, type:['woonwijk'],         ov:0 },
-      { id:'GN03', naam:'Wondelgem',          inw:22000, vrt:9400,  lat:51.0850, lng:3.7100, type:['woonwijk'],         ov:0 },
-      { id:'GN04', naam:'Mariakerke',         inw:19000, vrt:8200,  lat:51.0620, lng:3.6900, type:['woonwijk'],         ov:0 },
-      { id:'GN05', naam:'Gentse Kanaalzone',  inw:8000,  vrt:5800,  lat:51.0900, lng:3.7500, type:['bedrijventerrein'], ov:0 },
-      { id:'GN06', naam:'Drongen',            inw:15000, vrt:6800,  lat:51.0350, lng:3.6650, type:['woonwijk'],         ov:0 },
+      { id:'GN01', naam:'Gent Centrum',       inw:28000, vrt:9800,  lat:51.0543, lng:3.7174, type:['binnenstad'],       ov:0, opp:39.75 },
+      { id:'GN02', naam:'Ledeberg',           inw:18000, vrt:7200,  lat:51.0380, lng:3.7350, type:['woonwijk'],         ov:0, opp:25.56 },
+      { id:'GN03', naam:'Wondelgem',          inw:22000, vrt:9400,  lat:51.0850, lng:3.7100, type:['woonwijk'],         ov:0, opp:31.24 },
+      { id:'GN04', naam:'Mariakerke',         inw:19000, vrt:8200,  lat:51.0620, lng:3.6900, type:['woonwijk'],         ov:0, opp:26.98 },
+      { id:'GN05', naam:'Gentse Kanaalzone',  inw:8000,  vrt:5800,  lat:51.0900, lng:3.7500, type:['bedrijventerrein'], ov:0, opp:11.36 },
+      { id:'GN06', naam:'Drongen',            inw:15000, vrt:6800,  lat:51.0350, lng:3.6650, type:['woonwijk'],         ov:0, opp:21.30 },
     ],
   },
 ];
@@ -157,22 +160,23 @@ async function seedStartdata() {
     await client.query('BEGIN');
     for (const g of STARTDATA) {
       await client.query(`
-        INSERT INTO gemeenten (id,naam,provincie,land,inwoners,voertuigen,center_lat,center_lng,zoom,kleur,bbox,welvaartsindex,prive_pct_berekend,ev_aandeel_override)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        INSERT INTO gemeenten (id,naam,provincie,land,inwoners,voertuigen,center_lat,center_lng,zoom,kleur,bbox,welvaartsindex,prive_pct_berekend,ev_aandeel_override,oppervlakte_km2)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
         ON CONFLICT (id) DO NOTHING`,
         [g.id, g.naam, g.provincie, g.land, g.inwoners, g.voertuigen,
          g.lat, g.lng, g.zoom, g.kleur, JSON.stringify(g.bbox),
          g.welvaartsindex ?? 106.9, g.privePctBerekend ?? 0.5,
-         g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null]);
+         g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null,
+         g.oppervlakte ?? null]);
 
       for (let i = 0; i < g.wijken.length; i++) {
         const w = g.wijken[i];
         await client.query(`
-          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde,oppervlakte_km2,oppervlakte_is_proxy)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
           ON CONFLICT (id,gemeente_id) DO NOTHING`,
           [w.id, g.id, w.naam, w.inw, w.vrt, w.lat, w.lng,
-           JSON.stringify(w.type), w.ov, i]);
+           JSON.stringify(w.type), w.ov, i, w.opp ?? null, false]);
       }
     }
     await client.query('COMMIT');

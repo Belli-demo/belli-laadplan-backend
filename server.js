@@ -31,6 +31,7 @@ function rowToGemeente(row, wijken = []) {
     welvaartsindex:   row.welvaartsindex != null ? parseFloat(row.welvaartsindex) : 106.9,
     privePctBerekend: row.prive_pct_berekend != null ? parseFloat(row.prive_pct_berekend) : 0.5,
     evAandeelOverride: row.ev_aandeel_override || undefined,
+    oppervlakteKm2: row.oppervlakte_km2 != null ? parseFloat(row.oppervlakte_km2) : null,
     center:     [parseFloat(row.center_lat), parseFloat(row.center_lng)],
     zoom:       row.zoom,
     kleur:      row.kleur,
@@ -49,6 +50,8 @@ function rowToGemeente(row, wijken = []) {
       // ['woonwijk'] i.p.v. de vroegere, niet meer gebruikte tekstwaarde.
       wijktype:    (w.wijktype_v2 && w.wijktype_v2.length) ? w.wijktype_v2 : ['woonwijk'],
       ovAandeel:   w.ov_aandeel != null ? parseFloat(w.ov_aandeel) : 0,
+      oppervlakteKm2: w.oppervlakte_km2 != null ? parseFloat(w.oppervlakte_km2) : null,
+      oppervlakteIsProxy: w.oppervlakte_is_proxy !== false,
     })),
   };
 }
@@ -102,8 +105,8 @@ app.post('/gemeenten', async (req, res) => {
     await client.query('BEGIN');
 
     await client.query(`
-      INSERT INTO gemeenten (id,naam,provincie,land,inwoners,voertuigen,center_lat,center_lng,zoom,kleur,bbox,welvaartsindex,prive_pct_berekend,ev_aandeel_override)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      INSERT INTO gemeenten (id,naam,provincie,land,inwoners,voertuigen,center_lat,center_lng,zoom,kleur,bbox,welvaartsindex,prive_pct_berekend,ev_aandeel_override,oppervlakte_km2)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [ g.id, g.naam, g.provincie||'', g.land||'België',
         g.inwoners||0, g.voertuigen||0,
         g.center?.[0]||0, g.center?.[1]||0,
@@ -111,20 +114,23 @@ app.post('/gemeenten', async (req, res) => {
         JSON.stringify(g.bbox||[]),
         g.welvaartsindex ?? 106.9,
         g.privePctBerekend ?? 0.5,
-        g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null ]);
+        g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null,
+        g.oppervlakteKm2 ?? null ]);
 
     if (g.wijken?.length) {
       for (let i=0; i<g.wijken.length; i++) {
         const w = g.wijken[i];
         await client.query(`
-          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde,oppervlakte_km2,oppervlakte_is_proxy)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [ w.id||`WK${String(i+1).padStart(2,'0')}`, g.id,
             w.naam||`Wijk ${i+1}`, w.inwoners||0, w.voertuigen||0,
             w.lat||0, w.lng||0,
             JSON.stringify(w.wijktype && w.wijktype.length ? w.wijktype : ['woonwijk']),
             w.ovAandeel || 0,
-            i ]);
+            i,
+            w.oppervlakteKm2 ?? null,
+            w.oppervlakteIsProxy !== false ]);
       }
     }
 
@@ -160,14 +166,16 @@ app.put('/gemeenten/:id', async (req, res) => {
         naam=$1, provincie=$2, land=$3, inwoners=$4, voertuigen=$5,
         center_lat=$6, center_lng=$7, zoom=$8, kleur=$9, bbox=$10,
         welvaartsindex=$11, prive_pct_berekend=$12, ev_aandeel_override=$13,
+        oppervlakte_km2=$14,
         bijgewerkt=NOW()
-      WHERE id=$14`,
+      WHERE id=$15`,
       [ g.naam, g.provincie, g.land, g.inwoners, g.voertuigen,
         g.center?.[0], g.center?.[1], g.zoom, g.kleur,
         JSON.stringify(g.bbox),
         g.welvaartsindex ?? 106.9,
         g.privePctBerekend ?? 0.5,
         g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null,
+        g.oppervlakteKm2 ?? null,
         req.params.id ]);
 
     // Verwijder bestaande wijken en herplaats
@@ -176,12 +184,14 @@ app.put('/gemeenten/:id', async (req, res) => {
       for (let i=0; i<g.wijken.length; i++) {
         const w = g.wijken[i];
         await client.query(`
-          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          INSERT INTO wijken (id,gemeente_id,naam,inwoners,voertuigen,lat,lng,wijktype_v2,ov_aandeel,volgorde,oppervlakte_km2,oppervlakte_is_proxy)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [ w.id, req.params.id, w.naam, w.inwoners, w.voertuigen,
             w.lat, w.lng,
             JSON.stringify(w.wijktype && w.wijktype.length ? w.wijktype : ['woonwijk']),
-            w.ovAandeel || 0, i ]);
+            w.ovAandeel || 0, i,
+            w.oppervlakteKm2 ?? null,
+            w.oppervlakteIsProxy !== false ]);
       }
     }
     await client.query('COMMIT');
@@ -200,8 +210,8 @@ app.put('/gemeenten/:id', async (req, res) => {
 // ── PATCH /gemeenten/:id — gemeente gedeeltelijk bijwerken ──────────
 app.patch('/gemeenten/:id', async (req, res) => {
   const fields = req.body;
-  const allowed = ['naam','provincie','inwoners','voertuigen','kleur','zoom','welvaartsindex','privePctBerekend','evAandeelOverride'];
-  const kolomNaam = { privePctBerekend:'prive_pct_berekend', evAandeelOverride:'ev_aandeel_override' };
+  const allowed = ['naam','provincie','inwoners','voertuigen','kleur','zoom','welvaartsindex','privePctBerekend','evAandeelOverride','oppervlakteKm2'];
+  const kolomNaam = { privePctBerekend:'prive_pct_berekend', evAandeelOverride:'ev_aandeel_override', oppervlakteKm2:'oppervlakte_km2' };
   const gefilterd = Object.entries(fields).filter(([k]) => allowed.includes(k));
   const updates = gefilterd.map(([k], i) => `${kolomNaam[k]||k}=$${i+2}`);
 
@@ -251,11 +261,13 @@ app.patch('/gemeenten/:gid/wijken/:wid', async (req, res) => {
     await pool.query(`
       UPDATE wijken SET
         naam=$1, inwoners=$2, voertuigen=$3,
-        wijktype_v2=$4, ov_aandeel=$5
-      WHERE id=$6 AND gemeente_id=$7`,
+        wijktype_v2=$4, ov_aandeel=$5, oppervlakte_km2=$6, oppervlakte_is_proxy=$7
+      WHERE id=$8 AND gemeente_id=$9`,
       [ w.naam, w.inwoners, w.voertuigen,
         JSON.stringify(w.wijktype && w.wijktype.length ? w.wijktype : ['woonwijk']),
         w.ovAandeel || 0,
+        w.oppervlakteKm2 ?? null,
+        w.oppervlakteIsProxy !== false,
         wid, gid ]);
     res.json({ ok:true });
   } catch(e) {
