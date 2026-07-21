@@ -67,10 +67,7 @@ app.get('/health', (_, res) => res.json({ status:'ok', ts: new Date().toISOStrin
 // ── GET /gemeenten — alle gemeenten (zonder wijkdetail) ──────────────
 app.get('/gemeenten', async (_, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id,naam,provincie,land,inwoners,voertuigen,
-              center_lat,center_lng,zoom,kleur,bbox,aangemaakt,bijgewerkt
-       FROM gemeenten ORDER BY naam`);
+    const { rows } = await pool.query('SELECT * FROM gemeenten ORDER BY naam');
     res.json(rows.map(r => rowToGemeente(r)));
   } catch(e) {
     res.status(500).json({ error: e.message });
