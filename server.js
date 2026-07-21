@@ -446,6 +446,82 @@ app.get('/geo/fluvius-prive/:id', async (req, res) => {
   }
 });
 
+// GET /geo/ev-aandeel/:nisCode — EV-aandeel per gemeente via Provincies in
+// Cijfers ODS API (Swing). Variabelecodes: v2101_personenwagens_elektriciteit
+// plus de vijf overige brandstoftypen. Peiljaar: 2025 (meest recent beschikbaar).
+// Vereist mogelijk een API-key: stel PROVINCIES_INCIJFERS_API_KEY in als Railway
+// environment variable als de API een 401/403 teruggeeft.
+app.get('/geo/ev-aandeel/:nisCode', async (req, res) => {
+  const { nisCode } = req.params;
+
+  if (!nisCode || !/^\d{5}$/.test(nisCode)) {
+    return res.status(400).json({ error: 'Ongeldige NIS-code. Verwacht 5 cijfers, bv. 24062.' });
+  }
+
+  const SWING_BASE = 'https://provincies.incijfers.be/ods/odata';
+  const PEILJAAR   = 'year_2025';
+  const GEOLEVEL   = 'gemeente';
+  const VARIABELEN = [
+    'v2101_personenwagens_elektriciteit',
+    'v2101_personenwagens_benzine',
+    'v2101_personenwagens_diesel',
+    'v2101_personenwagens_lpg',
+    'v2101_personenwagens_hybride',
+    'v2101_personenwagens_andere',
+  ];
+  const apiKey = process.env.PROVINCIES_INCIJFERS_API_KEY || null;
+
+  async function fetchVar(variabele) {
+    const url = `${SWING_BASE}/Indicators/${variabele}/Data` +
+      `?$filter=GeoLevel eq '${GEOLEVEL}' and Period eq '${PEILJAAR}'` +
+      ` and ExternalCode eq '${nisCode}'`;
+    const headers = { Accept: 'application/json' };
+    if (apiKey) headers['apikey'] = apiKey;
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error(`Swing ODS ${variabele}: ${r.status} ${r.statusText}`);
+    const json = await r.json();
+    return json.value || [];
+  }
+
+  try {
+    const resultaten = await Promise.all(VARIABELEN.map(fetchVar));
+
+    const waarden = {};
+    VARIABELEN.forEach((v, i) => {
+      const kortNaam = v.replace('v2101_personenwagens_', '');
+      const record   = resultaten[i].find(r => r.ValueType === 'Regular');
+      waarden[kortNaam] = record ? (record.Value ?? 0) : 0;
+    });
+
+    const evAantal     = waarden['elektriciteit'] || 0;
+    const totaalAantal = Object.values(waarden).reduce((s, v) => s + v, 0);
+    const evAandeel    = totaalAantal > 0 ? evAantal / totaalAantal : 0;
+    const eersteRecord = resultaten[0].find(r => r.ValueType === 'Regular');
+
+    return res.json({
+      nisCode,
+      gemeente:     eersteRecord?.GeoName || eersteRecord?.Name || null,
+      evAandeel:    parseFloat(evAandeel.toFixed(4)),    // bv. 0.0530
+      evAandeelPct: parseFloat((evAandeel * 100).toFixed(2)), // bv. 5.30
+      evAantal,
+      totaalAantal,
+      waarden,
+      peiljaar: 2025,
+      bron: 'Statbel via provincies.incijfers.be',
+    });
+
+  } catch (err) {
+    console.error('ev-aandeel fout:', err.message);
+    if (err.message.includes('401') || err.message.includes('403')) {
+      return res.status(503).json({
+        error: 'Provincies in Cijfers API vereist een API-key.',
+        instructie: 'Stel PROVINCIES_INCIJFERS_API_KEY in als Railway environment variable.',
+      });
+    }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /geo/ververs-bevolking — haalt het landelijke Rijksregister-bestand
 // opnieuw op en vult bevolking_rijksregister. Handmatig te triggeren, of
 // periodiek (bijv. maandelijks) aan te roepen; niet automatisch bij elke
