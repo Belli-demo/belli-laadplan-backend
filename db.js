@@ -61,6 +61,17 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_wijken_gemeente ON wijken(gemeente_id);
       CREATE INDEX IF NOT EXISTS idx_gemeenten_naam  ON gemeenten(naam);
 
+      -- Landelijke cache van Rijksregister-bevolkingscijfers (alle ~581
+      -- Belgische gemeenten, niet alleen de al onboarde), zodat onboarding
+      -- een snelle, lokale opzoeking doet in plaats van elke keer een
+      -- extern bestand te bevragen. Ververst via ververBevolkingscijfers().
+      CREATE TABLE IF NOT EXISTS bevolking_rijksregister (
+        naam         TEXT PRIMARY KEY,
+        inwoners     INTEGER NOT NULL,
+        bron         TEXT DEFAULT 'Rijksregister (IBZ)',
+        bijgewerkt   TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Migratie voor het herziene rekenmodel (zie Leeswijzer Strategisch
       -- Laadplan Modellering): welvaartsindex-correctie, berekend privé%,
       -- optionele lokale EV-aandeel-override, en wijktype als array (i.p.v.
@@ -85,11 +96,11 @@ async function initSchema() {
     // Deze UPDATE zet de juiste waarden altijd terug, ook op een bestaande rij.
     for (const g of STARTDATA) {
       await client.query(
-        `UPDATE gemeenten SET welvaartsindex=$1, prive_pct_berekend=$2, ev_aandeel_override=$3, oppervlakte_km2=$4, postcodes=$5
-         WHERE id=$6`,
+        `UPDATE gemeenten SET welvaartsindex=$1, prive_pct_berekend=$2, ev_aandeel_override=$3, oppervlakte_km2=$4, postcodes=$5, inwoners=$6, voertuigen=$7
+         WHERE id=$8`,
         [g.welvaartsindex ?? 106.9, g.privePctBerekend ?? 0.5,
          g.evAandeelOverride ? JSON.stringify(g.evAandeelOverride) : null, g.oppervlakte ?? null,
-         JSON.stringify(g.postcodes ?? []), g.id]);
+         JSON.stringify(g.postcodes ?? []), g.inwoners, g.voertuigen, g.id]);
       for (const w of g.wijken) {
         await client.query(
           `UPDATE wijken SET wijktype_v2=$1, ov_aandeel=$2, oppervlakte_km2=$3, oppervlakte_is_proxy=false WHERE id=$4 AND gemeente_id=$5`,
@@ -107,7 +118,7 @@ async function initSchema() {
 const STARTDATA = [
   {
     id:'leuven', naam:'Leuven', provincie:'Vlaams-Brabant', land:'België',
-    inwoners:104906, voertuigen:48200, oppervlakte:56.63,
+    inwoners:105233, voertuigen:48200, oppervlakte:56.63,
     welvaartsindex:115, privePctBerekend:0.636, evAandeelOverride:{2030:0.376, 2035:0.595},
     postcodes:['3000','3001','3010','3012','3018'], // extern geverifieerd (bpost)
     lat:50.8798, lng:4.7005, zoom:13, kleur:'#2B5F6E',
@@ -125,7 +136,7 @@ const STARTDATA = [
   },
   {
     id:'olen', naam:'Olen', provincie:'Antwerpen', land:'België',
-    inwoners:14000, voertuigen:8200, oppervlakte:23.10,
+    inwoners:12943, voertuigen:8200, oppervlakte:23.10,
     welvaartsindex:107, privePctBerekend:0.70,
     postcodes:['2250'], // extern geverifieerd (bpost/Wikipedia)
     lat:51.1400, lng:4.8600, zoom:13, kleur:'#3A6B4A',
@@ -139,7 +150,7 @@ const STARTDATA = [
   },
   {
     id:'gent', naam:'Gent', provincie:'Oost-Vlaanderen', land:'België',
-    inwoners:268000, voertuigen:112000, oppervlakte:156.18,
+    inwoners:273665, voertuigen:96409, oppervlakte:156.18,
     welvaartsindex:98, privePctBerekend:0.60,
     postcodes:['9000','9030','9031','9032','9040','9050','9051','9052'], // beste inschatting, mogelijk niet volledig
     lat:51.0543, lng:3.7174, zoom:12, kleur:'#9EC5CB',
@@ -217,4 +228,76 @@ async function seedStartdata() {
   }
 }
 
-module.exports = { pool, initSchema, seedStartdata, STARTDATA };
+module.exports = { pool, initSchema, seedStartdata, STARTDATA, ververBevolkingscijfers };
+
+// Haalt het maandelijks bijgewerkte, landelijke bevolkingsbestand van het
+// Rijksregister op (stabiele URL, geen datum in de bestandsnaam) en vult
+// de bevolking_rijksregister-tabel. Bron:
+// https://www.ibz.rrn.fgov.be/nl/burger/rijksregister-en-bevolking/bevolking/statistieken-van-bevolking
+//
+// LET OP: de exacte kolomstructuur van dit bestand kon niet vooraf worden
+// geverifieerd (netwerkbeperking bij het bouwen van deze functie). De
+// parsing zoekt daarom naar kolomkoppen op naam (gemeente/commune/inwoners/
+// population/aantal), in plaats van een vaste kolomindex aan te nemen, om
+// robuuster te zijn tegen kleine structuurverschillen. Bij een eerste
+// gebruik moet dit gecontroleerd worden tegen de echte respons.
+async function ververBevolkingscijfers() {
+  const XLSX = require('xlsx');
+  const url = 'https://www.ibz.rrn.fgov.be/sites/default/files/documents/nl/bevolking/statistieken/stat-1-1_n.xlsx';
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Rijksregister-bestand niet bereikbaar (HTTP ${resp.status})`);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rijen = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+  // Zoek de headerrij (de eerste rij met herkenbare kolomkoppen), want
+  // dit soort overheidsbestanden begint vaak met een paar titelregels.
+  let headerIdx = -1, gemeenteKol = -1, inwonersKol = -1;
+  for (let i = 0; i < Math.min(rijen.length, 15); i++) {
+    const rij = rijen[i].map(c => String(c ?? '').toLowerCase());
+    const gIdx = rij.findIndex(c => c.includes('gemeente') || c.includes('commune'));
+    const iIdx = rij.findIndex(c => c.includes('inwoners') || c.includes('population') || c.includes('aantal') || c === 'totaal' || c === 'total');
+    if (gIdx >= 0 && iIdx >= 0) { headerIdx = i; gemeenteKol = gIdx; inwonersKol = iIdx; break; }
+  }
+  if (headerIdx === -1) {
+    throw new Error('Kon de kolomkoppen (gemeente/inwoners) niet herkennen in het Rijksregister-bestand. Structuur controleren.');
+  }
+
+  let bijgewerkt = 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = headerIdx + 1; i < rijen.length; i++) {
+      const rij = rijen[i];
+      const naam = rij?.[gemeenteKol];
+      const inwonersRuw = rij?.[inwonersKol];
+      if (!naam || inwonersRuw == null) continue;
+      const inwoners = parseInt(String(inwonersRuw).replace(/\./g, '').replace(/,/g, ''));
+      if (!Number.isFinite(inwoners) || inwoners <= 0) continue;
+      await client.query(
+        `INSERT INTO bevolking_rijksregister (naam, inwoners, bijgewerkt)
+         VALUES ($1,$2,NOW())
+         ON CONFLICT (naam) DO UPDATE SET inwoners=$2, bijgewerkt=NOW()`,
+        [String(naam).trim(), inwoners]);
+      bijgewerkt++;
+    }
+    // Werk ook meteen alle al onboarde gemeenten bij (naam-matching,
+    // hoofdletterongevoelig), zodat een ververs niet alleen de landelijke
+    // referentietabel vult maar ook direct de eigen gemeenten actualiseert.
+    const { rowCount: gemeentenBijgewerkt } = await client.query(`
+      UPDATE gemeenten g
+      SET inwoners = b.inwoners
+      FROM bevolking_rijksregister b
+      WHERE LOWER(g.naam) = LOWER(b.naam)
+        AND (g.inwoners IS NULL OR g.inwoners <> b.inwoners)
+    `);
+    await client.query('COMMIT');
+    return { bijgewerkt, gemeentenBijgewerkt, bron: url };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}

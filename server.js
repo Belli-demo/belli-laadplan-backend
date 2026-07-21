@@ -4,7 +4,7 @@ const express      = require('express');
 const cors         = require('cors');
 const helmet       = require('helmet');
 const rateLimit    = require('express-rate-limit');
-const { pool, initSchema, seedStartdata } = require('./db');
+const { pool, initSchema, seedStartdata, ververBevolkingscijfers } = require('./db');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -441,6 +441,34 @@ app.get('/geo/fluvius-prive/:id', async (req, res) => {
       bron: 'Fluvius Open Data, dataset 1_21-aangemelde-oplaadpunten-voor-ev',
       opgehaald: new Date().toISOString(),
     });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /geo/ververs-bevolking — haalt het landelijke Rijksregister-bestand
+// opnieuw op en vult bevolking_rijksregister. Handmatig te triggeren, of
+// periodiek (bijv. maandelijks) aan te roepen; niet automatisch bij elke
+// serverstart, om het externe bestand niet onnodig vaak te bevragen.
+app.post('/geo/ververs-bevolking', async (req, res) => {
+  try {
+    const resultaat = await ververBevolkingscijfers();
+    res.json(resultaat);
+  } catch(e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// GET /geo/bevolking/:naam — snelle, lokale opzoeking in de gecachete
+// Rijksregister-tabel, i.p.v. bij elke onboarding een extern bestand of
+// Wikidata te bevragen.
+app.get('/geo/bevolking/:naam', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT naam, inwoners, bron, bijgewerkt FROM bevolking_rijksregister WHERE naam ILIKE $1 LIMIT 1',
+      [req.params.naam]);
+    if (!rows.length) return res.status(404).json({ error: 'Geen bevolkingscijfer gevonden voor deze naam. Probeer /geo/ververs-bevolking als de tabel nog leeg is.' });
+    res.json(rows[0]);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
