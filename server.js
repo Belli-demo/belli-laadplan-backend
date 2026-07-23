@@ -692,7 +692,7 @@ app.get('/admin/vul-postcodes-aan', async (req, res) => {
       const sleutel = normaliseerNaam(g.naam);
       const postcodes = POSTCODES_LOOKUP[sleutel];
       if (!postcodes) { geenLookup.push({ id: g.id, naam: g.naam }); continue; }
-      await pool.query('UPDATE gemeenten SET postcodes=$1 WHERE id=$2', [postcodes, g.id]);
+      await pool.query('UPDATE gemeenten SET postcodes=$1 WHERE id=$2', [JSON.stringify(postcodes), g.id]);
       bijgewerkt.push({ id: g.id, naam: g.naam, postcodes });
     }
     res.json({
