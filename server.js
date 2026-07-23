@@ -675,6 +675,57 @@ app.get('/geo/nis-lookup', async (req, res) => {
   }
 });
 
+// GET /geo/gemeenten-lijst?land=België  — volledige lijst Vlaamse gemeenten
+// voor de zoekbalk in het onboarding-paneel. Wordt bij pagina-load opgehaald,
+// zodat de frontend niet meer met een hardcoded shortlist werkt.
+// Bron: nis-lookup.js (Statbel 2024). Provincie wordt afgeleid uit de eerste
+// twee cijfers van de NIS-code.
+const { NIS_CODES } = require('./nis-lookup');
+
+// Enkel Vlaamse provincies. Waalse (5/6/8/9), Waals-Brabant (25),
+// Brussels-Hoofdstedelijk (21) worden hier uitgesloten.
+const VLAAMSE_NIS_PREFIXES = {
+  '11': 'Antwerpen', '12': 'Antwerpen', '13': 'Antwerpen',
+  '23': 'Vlaams-Brabant', '24': 'Vlaams-Brabant',
+  '31': 'West-Vlaanderen', '32': 'West-Vlaanderen', '33': 'West-Vlaanderen',
+  '34': 'West-Vlaanderen', '35': 'West-Vlaanderen', '36': 'West-Vlaanderen',
+  '37': 'West-Vlaanderen', '38': 'West-Vlaanderen',
+  '41': 'Oost-Vlaanderen', '42': 'Oost-Vlaanderen', '43': 'Oost-Vlaanderen',
+  '44': 'Oost-Vlaanderen', '45': 'Oost-Vlaanderen', '46': 'Oost-Vlaanderen',
+  '71': 'Limburg', '72': 'Limburg', '73': 'Limburg',
+};
+
+// Nederlandse tussenvoegsels blijven klein: "Heist-op-den-Berg", niet
+// "Heist-Op-Den-Berg". Namen in nis-lookup.js zijn lowercase.
+const KLEIN_WOORDEN = new Set(['op','de','den','der','ter','van','en','met','aan','bij']);
+function capitaliseerGemeentenaam(naam) {
+  return naam.split(/([-\s])/).map((deel, i) => {
+    if (deel === '-' || deel === ' ') return deel;
+    const laag = deel.toLowerCase();
+    if (i > 0 && KLEIN_WOORDEN.has(laag)) return laag;
+    // Eerste letter naar hoofdletter, rest zoals is (behandelt apostrof correct: 's Gravenbrakel).
+    return deel.charAt(0).toUpperCase() + deel.slice(1);
+  }).join('');
+}
+
+app.get('/geo/gemeenten-lijst', (req, res) => {
+  const land = req.query.land || 'België';
+  // Nederlandse lijst blijft nog client-side hardcoded; enkel Belgische
+  // gemeenten worden hier server-side geleverd.
+  if (land !== 'België') {
+    return res.json({ gemeenten: [], land, bron: 'geen (België-only)' });
+  }
+  const gemeenten = Object.entries(NIS_CODES)
+    .filter(([, nis]) => VLAAMSE_NIS_PREFIXES[nis.substring(0, 2)] != null)
+    .map(([naam, nis]) => ({
+      naam: capitaliseerGemeentenaam(naam),
+      nis,
+      provincie: VLAAMSE_NIS_PREFIXES[nis.substring(0, 2)],
+    }))
+    .sort((a, b) => a.naam.localeCompare(b.naam, 'nl'));
+  res.json({ gemeenten, land, aantal: gemeenten.length, bron: 'Statbel 2024 via nis-lookup.js' });
+});
+
 // POST /geo/onboard/:id — sectoren ophalen en opslaan voor gemeente
 app.post('/geo/onboard/:id', async (req, res) => {
   const { id } = req.params;
