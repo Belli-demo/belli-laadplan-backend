@@ -469,15 +469,16 @@ app.get('/geo/fluvius-historie/:id', async (req, res) => {
 
     for (const postcode of postcodes) {
       try {
-        // Haal alle records per postcode op met jaar_indienstname veld
-        const url = `https://opendata.fluvius.be/api/explore/v2.1/catalog/datasets/1_21-aangemelde-oplaadpunten-voor-ev/records?where=postcode%3D%22${encodeURIComponent(postcode)}%22&limit=100&select=jaar_indienstname`;
+        // Zelfde v2 API-versie als het werkende /geo/fluvius-prive endpoint.
+        // Records zijn genest onder .records[].record.fields
+        const url = `https://opendata.fluvius.be/api/v2/catalog/datasets/1_21-aangemelde-oplaadpunten-voor-ev/records?where=postcode%3D%22${encodeURIComponent(postcode)}%22&limit=100&select=jaar_indienstname`;
         const resp = await fetch(url);
         if (!resp.ok) { mislukt.push(postcode); continue; }
         const data = await resp.json();
-        const records = data.results || [];
+        const records = data.records || [];
         totaal += records.length;
         for (const rec of records) {
-          const jaar = rec.jaar_indienstname;
+          const jaar = rec.record?.fields?.jaar_indienstname ?? rec.fields?.jaar_indienstname ?? rec.jaar_indienstname;
           if (jaar == null) continue;
           for (let j = Math.max(jaar, vanaf); j <= tot; j++) {
             cumulatief[j] += 1;
