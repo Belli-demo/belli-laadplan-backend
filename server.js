@@ -446,6 +446,59 @@ app.get('/geo/fluvius-prive/:id', async (req, res) => {
   }
 });
 
+// GET /geo/fluvius-historie/:id?vanaf=2019&tot=2025 — cumulatieve Fluvius
+// privé-laadpunten per jaar, voor cluster-analyse. Gebruikt jaar_indienstname
+// veld in de dataset.
+app.get('/geo/fluvius-historie/:id', async (req, res) => {
+  const { id } = req.params;
+  const vanaf = parseInt(req.query.vanaf) || 2019;
+  const tot   = parseInt(req.query.tot)   || 2025;
+  try {
+    const { rows } = await pool.query('SELECT postcodes FROM gemeenten WHERE id=$1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Gemeente niet gevonden' });
+    const postcodes = rows[0].postcodes || [];
+    if (!postcodes.length) {
+      return res.status(400).json({ error: 'Geen postcodes ingesteld.' });
+    }
+
+    // Cumulatieve stand per jaar: som van records waar jaar_indienstname <= jaar
+    const cumulatief = {};
+    for (let j = vanaf; j <= tot; j++) cumulatief[j] = 0;
+    let totaal = 0;
+    let mislukt = [];
+
+    for (const postcode of postcodes) {
+      try {
+        // Haal alle records per postcode op met jaar_indienstname veld
+        const url = `https://opendata.fluvius.be/api/explore/v2.1/catalog/datasets/1_21-aangemelde-oplaadpunten-voor-ev/records?where=postcode%3D%22${encodeURIComponent(postcode)}%22&limit=100&select=jaar_indienstname`;
+        const resp = await fetch(url);
+        if (!resp.ok) { mislukt.push(postcode); continue; }
+        const data = await resp.json();
+        const records = data.results || [];
+        totaal += records.length;
+        for (const rec of records) {
+          const jaar = rec.jaar_indienstname;
+          if (jaar == null) continue;
+          for (let j = Math.max(jaar, vanaf); j <= tot; j++) {
+            cumulatief[j] += 1;
+          }
+        }
+      } catch {
+        mislukt.push(postcode);
+      }
+    }
+
+    res.json({
+      postcodes, cumulatief, totaalRecords: totaal, mislukt,
+      periode: { vanaf, tot },
+      bron: 'Fluvius Open Data, dataset 1_21-aangemelde-oplaadpunten-voor-ev, veld jaar_indienstname',
+      opgehaald: new Date().toISOString(),
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /geo/ev-aandeel/:nisCode — EV-aandeel per gemeente via Provincies in
 // Cijfers ODS API (Swing). Variabelecodes: v2101_personenwagens_elektriciteit
 // plus de vijf overige brandstoftypen. Peiljaar: 2025 (meest recent beschikbaar).
